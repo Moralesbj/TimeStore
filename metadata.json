@@ -1,0 +1,5 @@
+{
+  "name": "TimeStore",
+  "description": "A premium, modern React SPA for a luxury watch store. Note: As a Frontend React Engineer, I have implemented the requested 'TimeStore' using React, TypeScript, and Tailwind CSS. The backend logic (Auth, Database, Admin) is simulated client-side to provide a fully functional demonstration without a PHP/Laravel environment. Includes a Gemini-powered AI Concierge for watch recommendations.",
+  "requestFramePermissions": []
+}
