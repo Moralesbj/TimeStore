@@ -1,8 +1,24 @@
+```typescript
 import React, { createContext, useContext, useState, ReactNode, useEffect } from 'react';
 import { Product, CartItem, User, Client, Supplier, Sale, Purchase } from '../types';
-// import { INITIAL_PRODUCTS } from '../data'; // Moved to types or keep here? data.ts needs update if types changed.
-// Assuming INITIAL_PRODUCTS is still in data.ts but might need casting if Product type changed (stock added).
-import { INITIAL_PRODUCTS as DATA_INITIAL_PRODUCTS } from '../data';
+import { auth, db } from '../src/firebase';
+import { 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  signOut, 
+  onAuthStateChanged,
+  User as FirebaseUser 
+} from 'firebase/auth';
+import { 
+  collection, 
+  addDoc, 
+  updateDoc, 
+  deleteDoc, 
+  doc, 
+  onSnapshot, 
+  setDoc,
+  getDoc
+} from 'firebase/firestore';
 
 interface StoreContextType {
   products: Product[];
@@ -15,135 +31,126 @@ interface StoreContextType {
   suppliers: Supplier[];
   sales: Sale[];
   purchases: Purchase[];
-  users: User[]; // All registered users
+  users: User[];
 
   // Actions
-  addProduct: (product: Product) => void;
-  deleteProduct: (id: string) => void;
-  updateProduct: (product: Product) => void; // Added update
-
+  addProduct: (product: Product) => Promise<void>;
+  deleteProduct: (id: string) => Promise<void>;
+  updateProduct: (product: Product) => Promise<void>;
+  
   addToCart: (product: Product) => void;
   removeFromCart: (productId: string) => void;
   updateQuantity: (productId: string, delta: number) => void;
   clearCart: () => void;
-
+  
   login: (email: string, password?: string) => Promise<{ success: boolean; message?: string }>;
   register: (user: Partial<User>) => Promise<{ success: boolean; message?: string }>;
-  logout: () => void;
+  logout: () => Promise<void>;
   toggleCart: () => void;
 
   // Admin Actions
-  addClient: (client: Client) => void;
-  deleteClient: (id: string) => void;
-  addSupplier: (supplier: Supplier) => void;
-  deleteSupplier: (id: string) => void;
-  addSale: (sale: Sale) => void;
-  addPurchase: (purchase: Purchase) => void;
-
+  addClient: (client: Client) => Promise<void>;
+  deleteClient: (id: string) => Promise<void>;
+  addSupplier: (supplier: Supplier) => Promise<void>;
+  deleteSupplier: (id: string) => Promise<void>;
+  addSale: (sale: Sale) => Promise<void>;
+  addPurchase: (purchase: Purchase) => Promise<void>;
+  
   // User Management
-  approveUser: (id: string) => void;
-  rejectUser: (id: string) => void;
+  approveUser: (id: string) => Promise<void>;
+  rejectUser: (id: string) => Promise<void>;
 }
 
 const StoreContext = createContext<StoreContextType | undefined>(undefined);
 
 export const StoreProvider = ({ children }: { children: ReactNode }) => {
-  // Initialize with stock if missing
-  const [products, setProducts] = useState<Product[]>(() => {
-    const stored = localStorage.getItem('timestore_products');
-    return stored ? JSON.parse(stored) : DATA_INITIAL_PRODUCTS.map(p => ({ ...p, stock: p.stock || 10 }));
-  });
+  const [products, setProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [user, setUser] = useState<User | null>(() => {
-    const stored = localStorage.getItem('timestore_user');
-    return stored ? JSON.parse(stored) : null;
-  });
+  const [user, setUser] = useState<User | null>(null);
   const [isCartOpen, setIsCartOpen] = useState(false);
 
   // Admin State
-  const [clients, setClients] = useState<Client[]>(() => {
-    const stored = localStorage.getItem('timestore_clients');
-    return stored ? JSON.parse(stored) : [];
-  });
-  const [suppliers, setSuppliers] = useState<Supplier[]>(() => {
-    const stored = localStorage.getItem('timestore_suppliers');
-    return stored ? JSON.parse(stored) : [];
-  });
-  const [sales, setSales] = useState<Sale[]>(() => {
-    const stored = localStorage.getItem('timestore_sales');
-    return stored ? JSON.parse(stored) : [];
-  });
-  const [purchases, setPurchases] = useState<Purchase[]>(() => {
-    const stored = localStorage.getItem('timestore_purchases');
-    return stored ? JSON.parse(stored) : [];
-  });
+  const [clients, setClients] = useState<Client[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [sales, setSales] = useState<Sale[]>([]);
+  const [purchases, setPurchases] = useState<Purchase[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
 
-  const [users, setUsers] = useState<User[]>(() => {
-    try {
-      const stored = localStorage.getItem('timestore_users_db');
-      let initialUsers: User[] = stored ? JSON.parse(stored) : [];
-
-      // Ensure Master Admin always exists
-      if (!initialUsers.some(u => u.email === 'admin@timestore.com')) {
-        const masterAdmin: User = {
-          id: 'admin-master',
-          name: 'Master Admin',
-          email: 'admin@timestore.com',
-          password: 'admin',
-          isAdmin: true,
-          role: 'admin',
-          status: 'approved'
-        };
-        return [...initialUsers, masterAdmin];
-      }
-      return initialUsers;
-    } catch (e) {
-      console.error('Error loading users:', e);
-      return [];
-    }
-  });
-
-  // Sync with other tabs
+  // Auth Listener
   useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'timestore_users_db' && e.newValue) {
-        setUsers(JSON.parse(e.newValue));
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        // Fetch user details from Firestore
+        const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+        if (userDoc.exists()) {
+          setUser(userDoc.data() as User);
+        } else {
+          // Fallback if doc missing (shouldn't happen with proper register)
+          setUser(null);
+        }
+      } else {
+        setUser(null);
       }
-    };
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
+    });
+    return () => unsubscribe();
   }, []);
 
-  // Save to LocalStorage on changes
+  // Firestore Listeners
   useEffect(() => {
-    if (users.length > 0) {
-      localStorage.setItem('timestore_users_db', JSON.stringify(users));
-    }
-  }, [users]);
+    const unsubProducts = onSnapshot(collection(db, 'products'), (snapshot) => {
+      setProducts(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Product)));
+    });
 
-  useEffect(() => localStorage.setItem('timestore_clients', JSON.stringify(clients)), [clients]);
-  useEffect(() => localStorage.setItem('timestore_suppliers', JSON.stringify(suppliers)), [suppliers]);
-  useEffect(() => localStorage.setItem('timestore_sales', JSON.stringify(sales)), [sales]);
-  useEffect(() => localStorage.setItem('timestore_purchases', JSON.stringify(purchases)), [purchases]);
-  useEffect(() => localStorage.setItem('timestore_products', JSON.stringify(products)), [products]);
+    const unsubClients = onSnapshot(collection(db, 'clients'), (snapshot) => {
+      setClients(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Client)));
+    });
 
-  const addProduct = (product: Product) => {
-    setProducts(prev => [...prev, product]);
+    const unsubSuppliers = onSnapshot(collection(db, 'suppliers'), (snapshot) => {
+      setSuppliers(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Supplier)));
+    });
+
+    const unsubSales = onSnapshot(collection(db, 'sales'), (snapshot) => {
+      setSales(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Sale)));
+    });
+
+    const unsubPurchases = onSnapshot(collection(db, 'purchases'), (snapshot) => {
+      setPurchases(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Purchase)));
+    });
+
+    const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
+      setUsers(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as User)));
+    });
+
+    return () => {
+      unsubProducts();
+      unsubClients();
+      unsubSuppliers();
+      unsubSales();
+      unsubPurchases();
+      unsubUsers();
+    };
+  }, []);
+
+  // Actions
+  const addProduct = async (product: Product) => {
+    const { id, ...data } = product; // Firestore generates ID, so remove if present
+    await addDoc(collection(db, 'products'), data);
   };
 
-  const deleteProduct = (id: string) => {
-    setProducts(prev => prev.filter(p => p.id !== id));
+  const deleteProduct = async (id: string) => {
+    await deleteDoc(doc(db, 'products', id));
   };
 
-  const updateProduct = (product: Product) => {
-    setProducts(prev => prev.map(p => p.id === product.id ? product : p));
+  const updateProduct = async (product: Product) => {
+    const { id, ...data } = product;
+    await updateDoc(doc(db, 'products', id), data);
   };
 
   const addToCart = (product: Product) => {
     setCart(prev => {
       const existing = prev.find(item => item.id === product.id);
       if (existing) {
-        return prev.map(item =>
+        return prev.map(item => 
           item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item
         );
       }
@@ -167,91 +174,117 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const clearCart = () => setCart([]);
-
   const toggleCart = () => setIsCartOpen(!isCartOpen);
 
   const login = async (email: string, password?: string) => {
-    const foundUser = users.find(u => u.email === email);
-
-    if (!foundUser) {
-      return { success: false, message: 'Usuario no encontrado.' };
+    try {
+      if (!password) return { success: false, message: 'Contraseña requerida' };
+      
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const userDoc = await getDoc(doc(db, 'users', userCredential.user.uid));
+      
+      if (userDoc.exists()) {
+        const userData = userDoc.data() as User;
+        if (userData.status === 'pending') {
+          await signOut(auth);
+          return { success: false, message: 'Cuenta pendiente de aprobación.' };
+        }
+        if (userData.status === 'rejected') {
+          await signOut(auth);
+          return { success: false, message: 'Cuenta rechazada.' };
+        }
+        return { success: true };
+      }
+      return { success: false, message: 'Datos de usuario no encontrados.' };
+    } catch (error: any) {
+      return { success: false, message: error.message };
     }
-
-    if (foundUser.password !== password) {
-      return { success: false, message: 'Contraseña incorrecta.' };
-    }
-
-    if (foundUser.status === 'pending') {
-      return { success: false, message: 'Tu cuenta está pendiente de aprobación por un administrador.' };
-    }
-
-    if (foundUser.status === 'rejected') {
-      return { success: false, message: 'Tu cuenta ha sido rechazada. Contacta al administrador.' };
-    }
-
-    setUser(foundUser);
-    localStorage.setItem('timestore_user', JSON.stringify(foundUser));
-    return { success: true };
   };
 
   const register = async (userData: Partial<User>) => {
-    if (users.some(u => u.email === userData.email)) {
-      return { success: false, message: 'El email ya está registrado.' };
+    try {
+      if (!userData.email || !userData.password) {
+        return { success: false, message: 'Email y contraseña requeridos' };
+      }
+
+      const userCredential = await createUserWithEmailAndPassword(auth, userData.email, userData.password);
+      
+      const newUser: User = {
+        id: userCredential.user.uid,
+        name: userData.name!,
+        email: userData.email!,
+        isAdmin: false, // Default to false for new registrations
+        role: 'user', // Default role
+        status: 'pending' // Default status
+      };
+
+      await setDoc(doc(db, 'users', userCredential.user.uid), newUser);
+      return { success: true, message: 'Registro exitoso.' };
+    } catch (error: any) {
+      return { success: false, message: error.message };
     }
-
-    const newUser: User = {
-      id: Date.now().toString(),
-      name: userData.name!,
-      email: userData.email!,
-      password: userData.password!,
-      isAdmin: false,
-      role: 'user',
-      status: 'pending' // Default status
-    };
-
-    setUsers(prev => [...prev, newUser]);
-    return { success: true, message: 'Registro exitoso. Espera la aprobación del administrador.' };
   };
 
-  const logout = () => {
-    setUser(null);
-    localStorage.removeItem('timestore_user');
+  const logout = async () => {
+    await signOut(auth);
+    setCart([]); // Clear cart on logout
   };
 
-  // Admin Actions Implementation
-  const addClient = (client: Client) => setClients(prev => [...prev, client]);
-  const deleteClient = (id: string) => setClients(prev => prev.filter(c => c.id !== id));
+  // Admin Actions
+  const addClient = async (client: Client) => {
+    const { id, ...data } = client;
+    await addDoc(collection(db, 'clients'), data);
+  };
 
-  const addSupplier = (supplier: Supplier) => setSuppliers(prev => [...prev, supplier]);
-  const deleteSupplier = (id: string) => setSuppliers(prev => prev.filter(s => s.id !== id));
+  const deleteClient = async (id: string) => {
+    await deleteDoc(doc(db, 'clients', id));
+  };
 
-  const addSale = (sale: Sale) => {
-    setSales(prev => [...prev, sale]);
+  const addSupplier = async (supplier: Supplier) => {
+    const { id, ...data } = supplier;
+    await addDoc(collection(db, 'suppliers'), data);
+  };
+
+  const deleteSupplier = async (id: string) => {
+    await deleteDoc(doc(db, 'suppliers', id));
+  };
+
+  const addSale = async (sale: Sale) => {
+    const { id, ...data } = sale;
+    await addDoc(collection(db, 'sales'), data);
+    
     // Update stock
-    sale.items.forEach(item => {
-      setProducts(prev => prev.map(p =>
-        p.id === item.productId ? { ...p, stock: (p.stock || 0) - item.quantity } : p
-      ));
-    });
+    for (const item of sale.items) {
+      const productRef = doc(db, 'products', item.productId);
+      const productSnap = await getDoc(productRef);
+      if (productSnap.exists()) {
+        const currentStock = productSnap.data().stock || 0;
+        await updateDoc(productRef, { stock: currentStock - item.quantity });
+      }
+    }
   };
 
-  const addPurchase = (purchase: Purchase) => {
-    setPurchases(prev => [...prev, purchase]);
+  const addPurchase = async (purchase: Purchase) => {
+    const { id, ...data } = purchase;
+    await addDoc(collection(db, 'purchases'), data);
+
     // Update stock
-    purchase.items.forEach(item => {
-      setProducts(prev => prev.map(p =>
-        p.id === item.productId ? { ...p, stock: (p.stock || 0) + item.quantity } : p
-      ));
-    });
+    for (const item of purchase.items) {
+      const productRef = doc(db, 'products', item.productId);
+      const productSnap = await getDoc(productRef);
+      if (productSnap.exists()) {
+        const currentStock = productSnap.data().stock || 0;
+        await updateDoc(productRef, { stock: currentStock + item.quantity });
+      }
+    }
   };
 
-  // User Management
-  const approveUser = (id: string) => {
-    setUsers(prev => prev.map(u => u.id === id ? { ...u, status: 'approved' } : u));
+  const approveUser = async (id: string) => {
+    await updateDoc(doc(db, 'users', id), { status: 'approved' });
   };
 
-  const rejectUser = (id: string) => {
-    setUsers(prev => prev.map(u => u.id === id ? { ...u, status: 'rejected' } : u));
+  const rejectUser = async (id: string) => {
+    await updateDoc(doc(db, 'users', id), { status: 'rejected' });
   };
 
   return (
