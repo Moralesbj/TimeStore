@@ -1,21 +1,20 @@
-```typescript
 import React, { createContext, useContext, useState, ReactNode, useEffect } from 'react';
 import { Product, CartItem, User, Client, Supplier, Sale, Purchase } from '../types';
 import { auth, db } from '../src/firebase';
-import { 
-  signInWithEmailAndPassword, 
-  createUserWithEmailAndPassword, 
-  signOut, 
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
   onAuthStateChanged,
-  User as FirebaseUser 
+  User as FirebaseUser
 } from 'firebase/auth';
-import { 
-  collection, 
-  addDoc, 
-  updateDoc, 
-  deleteDoc, 
-  doc, 
-  onSnapshot, 
+import {
+  collection,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  doc,
+  onSnapshot,
   setDoc,
   getDoc
 } from 'firebase/firestore';
@@ -37,12 +36,12 @@ interface StoreContextType {
   addProduct: (product: Product) => Promise<void>;
   deleteProduct: (id: string) => Promise<void>;
   updateProduct: (product: Product) => Promise<void>;
-  
+
   addToCart: (product: Product) => void;
   removeFromCart: (productId: string) => void;
   updateQuantity: (productId: string, delta: number) => void;
   clearCart: () => void;
-  
+
   login: (email: string, password?: string) => Promise<{ success: boolean; message?: string }>;
   register: (user: Partial<User>) => Promise<{ success: boolean; message?: string }>;
   logout: () => Promise<void>;
@@ -55,7 +54,7 @@ interface StoreContextType {
   deleteSupplier: (id: string) => Promise<void>;
   addSale: (sale: Sale) => Promise<void>;
   addPurchase: (purchase: Purchase) => Promise<void>;
-  
+
   // User Management
   approveUser: (id: string) => Promise<void>;
   rejectUser: (id: string) => Promise<void>;
@@ -150,7 +149,7 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
     setCart(prev => {
       const existing = prev.find(item => item.id === product.id);
       if (existing) {
-        return prev.map(item => 
+        return prev.map(item =>
           item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item
         );
       }
@@ -179,10 +178,10 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
   const login = async (email: string, password?: string) => {
     try {
       if (!password) return { success: false, message: 'Contraseña requerida' };
-      
+
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const userDoc = await getDoc(doc(db, 'users', userCredential.user.uid));
-      
+
       if (userDoc.exists()) {
         const userData = userDoc.data() as User;
         if (userData.status === 'pending') {
@@ -208,7 +207,7 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
       }
 
       const userCredential = await createUserWithEmailAndPassword(auth, userData.email, userData.password);
-      
+
       const newUser: User = {
         id: userCredential.user.uid,
         name: userData.name!,
@@ -252,7 +251,7 @@ export const StoreProvider = ({ children }: { children: ReactNode }) => {
   const addSale = async (sale: Sale) => {
     const { id, ...data } = sale;
     await addDoc(collection(db, 'sales'), data);
-    
+
     // Update stock
     for (const item of sale.items) {
       const productRef = doc(db, 'products', item.productId);
